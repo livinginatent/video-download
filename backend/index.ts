@@ -4,29 +4,19 @@ import ytdl from "@distube/ytdl-core";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
-
+import sanitize from "sanitize-filename";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
-app.use(express.json());
-
-import express, { Request, Response } from "express";
-import cors from "cors";
-import ytdl from "@distube/ytdl-core";
-import ffmpeg from "fluent-ffmpeg";
-import fs from "fs";
-import path from "path";
-
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-app.use(cors());
-app.use(express.json());
+app.use(
+  cors({
+    exposedHeaders: ["Content-Disposition"],
+  })
+);app.use(express.json());
 
 app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
   const videoUrl = req.query.url as string;
-  const format = (req.query.format as string) || "mp4"; // Default to MP4
+  const format = (req.query.format as string) || "mp4";
 
   if (!ytdl.validateURL(videoUrl)) {
     res.status(400).json({ error: "Invalid YouTube URL" });
@@ -36,10 +26,10 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
   try {
     // Get video info to extract the title
     const info = await ytdl.getInfo(videoUrl);
-    let title = info.videoDetails.title || "video";
+    let title = info.videoDetails.title || "video1";
 
     // Sanitize the title for safe file naming
-    title = title.replace(/[<>:"/\\|?*]/g, "").substring(0, 100); // Remove illegal characters and limit length
+    title = sanitize(title).substring(0, 100) || "video"; // Use sanitize-filename
 
     const tempDir = path.resolve(__dirname, "output");
     if (!fs.existsSync(tempDir)) {
@@ -52,11 +42,12 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
       const mp3FilePath = path.join(tempDir, `${title}.mp3`); // Converted to MP3
 
       const audioStream = ytdl(videoUrl, { quality: "highestaudio" });
+  
       const audioWriteStream = fs.createWriteStream(audioFilePath);
 
       audioStream.pipe(audioWriteStream);
 
-      audioStream.on("end", () => {
+      audioWriteStream.on("finish", () => {
         // Convert WebM to MP3 using FFmpeg
         ffmpeg()
           .input(audioFilePath)
@@ -64,7 +55,9 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
           .audioCodec("libmp3lame")
           .on("end", () => {
             // Send the MP3 file to the client
+               
             res.download(mp3FilePath, `${title}.mp3`, (err) => {
+              console.log(title);
               if (err) {
                 console.error("Download error:", err);
               }
@@ -80,6 +73,11 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
           .run();
       });
 
+      audioWriteStream.on("error", (err) => {
+        console.error("Audio write stream error:", err);
+        res.status(500).json({ error: "Failed to process audio." });
+      });
+
       audioStream.on("error", (err) => {
         console.error("Audio stream error:", err);
         res.status(500).json({ error: "Failed to process audio." });
@@ -89,22 +87,24 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
       const videoFilePath = path.join(tempDir, `${title}.mp4`);
       const audioFilePath = path.join(tempDir, `${title}.audio.mp3`);
       const outputFilePath = path.join(tempDir, `${title}.final.mp4`);
-
+    
       // Download video and audio streams to temporary files
       await Promise.all([
         new Promise<void>((resolve, reject) => {
           const videoStream = ytdl(videoUrl, { quality: "highestvideo" });
           const videoWriteStream = fs.createWriteStream(videoFilePath);
           videoStream.pipe(videoWriteStream);
-          videoStream.on("end", resolve);
+          videoWriteStream.on("finish", resolve);
           videoStream.on("error", reject);
+          videoWriteStream.on("error", reject);
         }),
         new Promise<void>((resolve, reject) => {
           const audioStream = ytdl(videoUrl, { quality: "highestaudio" });
           const audioWriteStream = fs.createWriteStream(audioFilePath);
           audioStream.pipe(audioWriteStream);
-          audioStream.on("end", resolve);
+          audioWriteStream.on("finish", resolve);
           audioStream.on("error", reject);
+          audioWriteStream.on("error", reject);
         }),
       ]);
 
@@ -136,10 +136,6 @@ app.get("/api/download", async (req: Request, res: Response): Promise<void> => {
     console.error(err);
     res.status(500).json({ error: "Failed to download video." });
   }
-});
-
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
 });
 
 app.listen(PORT, () => {
